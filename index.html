@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Water Map</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#11171c" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Water Map" />
+<style>
+  html,body{margin:0;height:100%;background:#11171c;color:#e3e8ec;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #lock{position:fixed;inset:0;display:grid;place-items:center;padding:24px;box-sizing:border-box}
+  .box{width:min(360px,100%);display:flex;flex-direction:column;gap:12px;text-align:center}
+  .box img{width:72px;height:72px;margin:0 auto;border-radius:18px}
+  h1{font-size:20px;margin:4px 0 0} p{margin:0;color:#8d9aa5;font-size:14px;line-height:1.4}
+  input[type=password]{font-size:17px;padding:12px;border-radius:10px;border:1px solid #2a353e;background:#0f1519;color:#e3e8ec}
+  button{font-size:16px;padding:12px;border-radius:10px;border:1px solid #2d9db3;background:#1f6d7c;color:#fff;font-weight:600}
+  label{font-size:14px;color:#8d9aa5;display:flex;gap:8px;align-items:center;justify-content:center}
+  .err{color:#ffb4a8;min-height:1.2em;font-size:14px}
+  .busy{color:#8d9aa5;font-size:14px}
+</style></head>
+<body>
+<div id="lock"><form class="box" id="f">
+  <img src="icons/icon-192.png" alt="" />
+  <h1>Water Map</h1>
+  <p>Private map. Enter the password you were given.</p>
+  <input type="password" id="pw" autocomplete="current-password" placeholder="Password" autofocus />
+  <label><input type="checkbox" id="rem" checked /> Remember on this device (works offline)</label>
+  <button id="go" type="submit">Unlock</button>
+  <div class="err" id="err"></div>
+</form></div>
+<div id="root"></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const te = new TextEncoder(), td = new TextDecoder();
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+  const kv = (mode, fn) => new Promise((res, rej) => {
+    const o = indexedDB.open('vault-key', 1);
+    o.onupgradeneeded = () => o.result.createObjectStore('k');
+    o.onsuccess = () => { const t = o.result.transaction('k', mode); const r = fn(t.objectStore('k')); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); };
+    o.onerror = () => rej(o.error);
+  });
+  const dec = async (key, buf) => { const u = new Uint8Array(buf); return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)); };
+  const get = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error('Could not download ' + p + ' (' + r.status + ')'); return r.arrayBuffer(); };
+  let meta;
+  async function derive(pw) {
+    const base = await crypto.subtle.importKey('raw', te.encode(pw), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(meta.salt), iterations: meta.iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  }
+  async function ok(key) { try { await dec(key, b64(meta.check)); return true; } catch (e) { return false; } }
+  async function boot(key) {
+    const app = JSON.parse(td.decode(await dec(key, await get(meta.app))));
+    window.__VAULT = {
+      build: meta.build, seed: app.seed,
+      getFile: async (p) => dec(key, await get(p)),
+      forget: async () => { try { await kv('readwrite', (s) => s.delete('key')); } catch (e) {} location.reload(); },
+    };
+    const st = document.createElement('style'); st.textContent = app.css; document.head.appendChild(st);
+    $('lock').remove();
+    const s = document.createElement('script'); s.type = 'module';
+    s.src = URL.createObjectURL(new Blob([app.js], { type: 'text/javascript' }));
+    document.body.appendChild(s);
+  }
+  async function start() {
+    try { meta = await (await fetch('vault.json', { cache: 'no-cache' })).json(); }
+    catch (e) { $('err').textContent = 'Could not load the app. Check your connection the first time you open it.'; return; }
+    try {
+      const saved = await kv('readonly', (s) => s.get('key'));
+      if (saved && saved.salt === meta.salt && await ok(saved.key)) { $('f').style.display = 'none'; await boot(saved.key); return; }
+    } catch (e) {}
+  }
+  $('f').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!meta) return;
+    $('err').textContent = ''; $('go').disabled = true; $('go').textContent = 'Unlocking…';
+    try {
+      const key = await derive($('pw').value);
+      if (!(await ok(key))) { $('err').textContent = 'Wrong password.'; return; }
+      if ($('rem').checked) { try { await kv('readwrite', (s) => s.put({ key, salt: meta.salt }, 'key')); } catch (e) {} }
+      await boot(key);
+    } catch (e) { $('err').textContent = e.message; }
+    finally { const g = $('go'); if (g) { g.disabled = false; g.textContent = 'Unlock'; } }
+  });
+  start();
+})();
+</script>
+</body></html>
