@@ -1,5 +1,5 @@
 // Offline support: the lock screen, app and icons are cached; data files are fetched once by the app.
-const CACHE = 'wm-202611041245';
+const CACHE = 'wm-202611042019';
 const CORE = ['./', './index.html', './vault.json', './app.bin', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png', './icons/icon-maskable-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
