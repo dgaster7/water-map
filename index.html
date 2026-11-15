@@ -40,7 +40,23 @@
   const $ = (id) => document.getElementById(id);
   const te = new TextEncoder(), td = new TextDecoder();
   const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Updates: on every open (and when the app comes back to the front) the phone checks for a new version in
+  // the background. When one has downloaded, a small "Update ready" bar offers to restart into it.
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+    }).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || document.getElementById('upd')) return;
+      const bar = document.createElement('div'); bar.id = 'upd';
+      bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:calc(10px + env(safe-area-inset-top));z-index:9999;background:#1f6d7c;color:#fff;border-radius:22px;padding:8px 8px 8px 16px;font:14px system-ui,sans-serif;display:flex;gap:10px;align-items:center;box-shadow:0 6px 20px rgba(0,0,0,.4)';
+      bar.innerHTML = '<span>A new version of the app is ready</span><button style="font:600 14px system-ui;padding:7px 12px;border-radius:16px;border:0;background:#fff;color:#11414a">Restart</button>';
+      bar.querySelector('button').onclick = () => location.reload();
+      document.body.appendChild(bar);
+    });
+  }
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
   const kv = (mode, fn) => new Promise((res, rej) => {
     const o = indexedDB.open('vault-key', 1);
@@ -57,7 +73,7 @@
   }
   async function ok(key) { try { await dec(key, b64(meta.check)); return true; } catch (e) { return false; } }
   async function boot(key) {
-    const app = JSON.parse(td.decode(await dec(key, await get(meta.app))));
+    const app = JSON.parse(td.decode(await dec(key, await get(meta.app + '?b=' + meta.build))));
     window.__VAULT = {
       build: meta.build, seed: app.seed,
       getFile: async (p) => dec(key, await get(p)),
@@ -71,7 +87,7 @@
   }
   async function start() {
     try { meta = await (await fetch('vault.json', { cache: 'no-cache' })).json(); }
-    catch (e) { $('err').textContent = 'Could not load the app. Check your connection the first time you open it.'; return; }
+    catch (e) { $('err').textContent = 'Could not load the app. The first time, open it with an internet connection; after that it works offline.'; return; }
     try {
       const saved = await kv('readonly', (s) => s.get('key'));
       if (saved && saved.salt === meta.salt && await ok(saved.key)) { $('f').style.display = 'none'; await boot(saved.key); return; }
